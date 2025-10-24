@@ -2,10 +2,14 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { FileCacheChunk, CacheConfig } from '../types';
 import googleDriveService from './googleDrive';
 
+interface FileCacheChunkWithKey extends FileCacheChunk {
+  key: string;
+}
+
 interface CacheDB extends DBSchema {
   chunks: {
     key: string; // bookId_startOffset
-    value: FileCacheChunk;
+    value: FileCacheChunkWithKey;
     indexes: {
       'by-bookId': string;
       'by-cachedAt': number;

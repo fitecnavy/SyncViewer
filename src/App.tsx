@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import GoogleAuth from './components/Auth/GoogleAuth';
 import Library from './components/Library/Library';
 import TextViewer from './components/TextViewer/TextViewer';
@@ -11,7 +11,7 @@ type View = 'library' | 'viewer';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
+  const [, setUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<View>('library');
   const [currentBook, setCurrentBook] = useState<Book | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
