@@ -144,17 +144,30 @@
                     log(`초기화 시작 - API Key: ${API_KEY.substring(0, 20)}...`);
                     log(`초기화 시작 - Client ID: ${CLIENT_ID.substring(0, 30)}...`);
 
+                    // client만 먼저 초기화
                     await gapi.client.init({
                         apiKey: API_KEY,
-                        clientId: CLIENT_ID,
                         discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
-                        scope: 'https://www.googleapis.com/auth/drive.file',
-                        ux_mode: 'popup',
                     });
 
                     log('✓ gapi.client.init 완료');
 
+                    // auth2 별도 초기화 (cookie_policy 포함)
+                    log('auth2 초기화 시도...');
                     authInstance = gapi.auth2.getAuthInstance();
+
+                    if (!authInstance) {
+                        authInstance = await gapi.auth2.init({
+                            client_id: CLIENT_ID,
+                            scope: 'https://www.googleapis.com/auth/drive.file',
+                            cookie_policy: 'single_host_origin',
+                            plugin_name: 'SyncViewer',
+                        });
+                        log('✓ auth2.init 완료 (cookie_policy: single_host_origin)');
+                    } else {
+                        log('✓ auth2 이미 초기화됨');
+                    }
+
                     log('✓ authInstance 획득 성공');
 
                     const isSignedIn = authInstance.isSignedIn.get();
