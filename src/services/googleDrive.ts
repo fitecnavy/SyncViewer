@@ -24,20 +24,17 @@ class GoogleDriveService {
 
   /**
    * Google Drive API 초기화
+   * 참고: gapi.client는 GoogleAuth.tsx에서 이미 초기화됨
    */
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
-    await new Promise<void>((resolve) => {
-      gapi.load('client', async () => {
-        await gapi.client.init({
-          apiKey: import.meta.env.VITE_GOOGLE_API_KEY,
-          discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
-        });
-        this.isInitialized = true;
-        resolve();
-      });
-    });
+    // gapi.client가 이미 초기화되어 있는지 확인
+    if (!gapi.client || !gapi.client.drive) {
+      throw new Error('Google API client is not initialized. Please sign in first.');
+    }
+
+    this.isInitialized = true;
 
     // 폴더 생성 또는 찾기
     await this.ensureFoldersExist();
