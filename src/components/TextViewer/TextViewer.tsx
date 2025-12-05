@@ -13,6 +13,7 @@ const TextViewer: React.FC<TextViewerProps> = ({ book, onClose }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [currentPosition, setCurrentPosition] = useState(0);
   const [percentage, setPercentage] = useState(0);
+  const [currentLine, setCurrentLine] = useState(1);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentOffsetRef = useRef(0);
   const isInitialLoadRef = useRef(true);
@@ -39,6 +40,9 @@ const TextViewer: React.FC<TextViewerProps> = ({ book, onClose }) => {
         startPosition = savedProgress.position;
         setCurrentPosition(startPosition);
         setPercentage(savedProgress.percentage);
+        if (savedProgress.lineNumber) {
+          setCurrentLine(savedProgress.lineNumber);
+        }
       } else {
         // 원격에서 확인
         const remoteProgress = await syncService.fetchLatestProgress(book.id);
@@ -46,6 +50,9 @@ const TextViewer: React.FC<TextViewerProps> = ({ book, onClose }) => {
           startPosition = remoteProgress.position;
           setCurrentPosition(startPosition);
           setPercentage(remoteProgress.percentage);
+          if (remoteProgress.lineNumber) {
+            setCurrentLine(remoteProgress.lineNumber);
+          }
         }
       }
 
@@ -101,13 +108,18 @@ const TextViewer: React.FC<TextViewerProps> = ({ book, onClose }) => {
     const absolutePosition = contentOffsetRef.current + positionInContent;
     const newPercentage = (absolutePosition / book.fileSize) * 100;
 
+    // 현재 줄 번호 계산
+    const textUpToPosition = content.substring(0, positionInContent);
+    const lineNumber = calculateLineNumber(textUpToPosition);
+
     setCurrentPosition(absolutePosition);
     setPercentage(newPercentage);
+    setCurrentLine(lineNumber);
 
     // 주기적으로 진행 상황 저장 (5초마다)
     const now = Date.now();
     if (now - lastSaveTimeRef.current > 5000) {
-      saveProgress(absolutePosition, newPercentage);
+      saveProgress(absolutePosition, newPercentage, lineNumber);
       lastSaveTimeRef.current = now;
     }
 
@@ -123,11 +135,18 @@ const TextViewer: React.FC<TextViewerProps> = ({ book, onClose }) => {
     }
   }, [content, book.fileSize, book.id]);
 
-  const saveProgress = (position?: number, percent?: number) => {
+  const calculateLineNumber = (textUpToPosition: string): number => {
+    // Count newline characters to determine line number
+    const newlineCount = (textUpToPosition.match(/\n/g) || []).length;
+    return newlineCount + 1;
+  };
+
+  const saveProgress = (position?: number, percent?: number, lineNum?: number) => {
     const progress: ReadingProgress = {
       bookId: book.id,
       position: position ?? currentPosition,
       percentage: percent ?? percentage,
+      lineNumber: lineNum ?? currentLine,
       lastUpdated: Date.now(),
     };
 
@@ -202,7 +221,7 @@ const TextViewer: React.FC<TextViewerProps> = ({ book, onClose }) => {
 
       <div style={styles.footer}>
         <span style={styles.footerText}>
-          위치: {currentPosition.toLocaleString()} / {book.fileSize.toLocaleString()} bytes
+          위치: {currentPosition.toLocaleString()} / {book.fileSize.toLocaleString()} bytes • 줄: {currentLine.toLocaleString()}
         </span>
       </div>
     </div>
