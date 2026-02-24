@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SyncViewer - Google Auth Test</title>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 5px 10px 0;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+        #log {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔍 Google Auth 진단 도구</h1>
+
+        <div class="info">
+            <strong>현재 도메인:</strong> <span id="domain"></span><br>
+            <strong>API Key:</strong> <span id="apiKey"></span><br>
+            <strong>Client ID:</strong> <span id="clientId"></span>
+        </div>
+
+        <button onclick="testAuth()">인증 테스트 시작</button>
+        <button onclick="testSignIn()">로그인 시도</button>
+        <button onclick="clearLog()">로그 지우기</button>
+
+        <div id="status"></div>
+
+        <h3>로그:</h3>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        const API_KEY = 'AIzaSyAQxQu6PLy3iVk825OOpNt_JOf7BRUFqxI';
+        const CLIENT_ID = '771509966039-vooe355g3k36v9lqu32ulq1nq7d352ne.apps.googleusercontent.com';
+
+        let authInstance = null;
+
+        // 정보 표시
+        document.getElementById('domain').textContent = window.location.origin;
+        document.getElementById('apiKey').textContent = API_KEY.substring(0, 20) + '...';
+        document.getElementById('clientId').textContent = CLIENT_ID.substring(0, 30) + '...';
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        function setStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = type;
+            statusDiv.textContent = message;
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        function testAuth() {
+            log('=== 인증 테스트 시작 ===');
+            setStatus('테스트 진행 중...', 'info');
+
+            if (typeof gapi === 'undefined') {
+                log('❌ ERROR: gapi가 로드되지 않았습니다', 'error');
+                setStatus('❌ gapi 로드 실패', 'error');
+                return;
+            }
+            log('✓ gapi 로드 확인됨');
+
+            gapi.load('client:auth2', async () => {
+                try {
+                    log('✓ gapi.load 콜백 실행됨');
+
+                    log(`초기화 시작 - API Key: ${API_KEY.substring(0, 20)}...`);
+                    log(`초기화 시작 - Client ID: ${CLIENT_ID.substring(0, 30)}...`);
+
+                    // client만 먼저 초기화
+                    await gapi.client.init({
+                        apiKey: API_KEY,
+                        discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+                    });
+
+                    log('✓ gapi.client.init 완료');
+
+                    // auth2 별도 초기화 (cookie_policy 포함)
+                    log('auth2 초기화 시도...');
+                    authInstance = gapi.auth2.getAuthInstance();
+
+                    if (!authInstance) {
+                        authInstance = await gapi.auth2.init({
+                            client_id: CLIENT_ID,
+                            scope: 'https://www.googleapis.com/auth/drive.file',
+                            cookie_policy: 'single_host_origin',
+                            plugin_name: 'SyncViewer',
+                        });
+                        log('✓ auth2.init 완료 (cookie_policy: single_host_origin)');
+                    } else {
+                        log('✓ auth2 이미 초기화됨');
+                    }
+
+                    log('✓ authInstance 획득 성공');
+
+                    const isSignedIn = authInstance.isSignedIn.get();
+                    log(`현재 로그인 상태: ${isSignedIn ? '로그인됨' : '로그아웃됨'}`);
+
+                    setStatus('✅ 인증 초기화 성공!', 'success');
+                    log('=== 테스트 완료: 성공 ===');
+
+                } catch (error) {
+                    log(`❌ ERROR: ${error.message || error}`, 'error');
+                    log(`ERROR 상세: ${JSON.stringify(error, null, 2)}`);
+
+                    if (error.error) {
+                        log(`ERROR 코드: ${error.error}`);
+                        log(`ERROR 설명: ${error.error_description || 'N/A'}`);
+                    }
+
+                    if (error.details) {
+                        log(`ERROR details: ${error.details}`);
+                    }
+
+                    setStatus(`❌ 인증 실패: ${error.error || error.message || '알 수 없는 오류'}`, 'error');
+                    log('=== 테스트 완료: 실패 ===');
+                }
+            });
+        }
+
+        async function testSignIn() {
+            if (!authInstance) {
+                setStatus('먼저 "인증 테스트 시작"을 클릭하세요', 'error');
+                return;
+            }
+
+            try {
+                log('로그인 시도 중...');
+                log('로그인 옵션: { prompt: "select_account" }');
+
+                const user = await authInstance.signIn({
+                    prompt: 'select_account',
+                });
+
+                log('✓ 로그인 성공!');
+                const profile = user.getBasicProfile();
+                log(`사용자: ${profile.getName()} (${profile.getEmail()})`);
+                setStatus('✅ 로그인 성공!', 'success');
+            } catch (error) {
+                log(`❌ 로그인 실패: ${error.error || error}`);
+                log(`ERROR 세부사항: ${JSON.stringify(error, null, 2)}`);
+
+                if (error.error === 'popup_closed_by_user') {
+                    setStatus('❌ 로그인 팝업이 닫혔습니다', 'error');
+                } else if (error.error === 'access_denied') {
+                    setStatus('❌ 접근 거부: OAuth 동의 화면 설정을 확인하세요', 'error');
+                } else if (error.error === 'server_error') {
+                    log('서버 오류는 보통 다음 원인으로 발생합니다:');
+                    log('1. OAuth 동의 화면의 범위(Scopes)가 설정되지 않음');
+                    log('2. OAuth 동의 화면이 테스트 모드이고 테스트 사용자가 아님');
+                    log('3. Google Cloud Console 설정이 전파되지 않음 (5-10분 대기)');
+                    setStatus('❌ 서버 오류: OAuth 동의 화면 설정을 확인하세요', 'error');
+                } else {
+                    setStatus(`❌ 로그인 실패: ${error.error || '알 수 없는 오류'}`, 'error');
+                }
+            }
+        }
+
+        // 페이지 로드 시 자동으로 간단한 체크
+        window.onload = () => {
+            log('페이지 로드 완료');
+            log(`User Agent: ${navigator.userAgent}`);
+            log(`쿠키 활성화: ${navigator.cookieEnabled}`);
+        };
+    </script>
+</body>
+</html>
