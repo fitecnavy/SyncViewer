@@ -1,170 +1,172 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { GOOGLE_CONFIG, validateConfig } from '../../config/google';
 
 declare const gapi: any;
+declare const google: any;
 
 interface GoogleAuthProps {
   onAuthChange: (isSignedIn: boolean, user: any) => void;
 }
 
+// 토큰을 전역으로 관리
+let tokenClient: any = null;
+let accessToken: string | null = null;
+
+export const getAccessToken = (): string | null => accessToken;
+export const setAccessToken = (token: string | null) => {
+  accessToken = token;
+};
+
 const GoogleAuth: React.FC<GoogleAuthProps> = ({ onAuthChange }) => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<any>(null);
 
-  useEffect(() => {
-    initGoogleAuth();
+  const handleCredentialResponse = useCallback(async (response: any) => {
+    try {
+      // ID 토큰에서 사용자 정보 디코딩
+      const payload = JSON.parse(atob(response.credential.split('.')[1]));
+
+      const userData = {
+        id: payload.sub,
+        email: payload.email,
+        name: payload.name,
+        picture: payload.picture,
+      };
+
+      setUser(userData);
+
+      // Access Token 요청
+      tokenClient.requestAccessToken({ prompt: '' });
+    } catch (err) {
+      console.error('Error processing credential:', err);
+      setError('인증 처리 중 오류가 발생했습니다.');
+    }
   }, []);
 
-  const initGoogleAuth = () => {
-    // gapi가 로드되었는지 확인
+  const initGoogleAuth = useCallback(async () => {
+    // gapi와 google 로드 확인
     if (typeof gapi === 'undefined') {
-      console.error('gapi is undefined');
       setError('Google API 스크립트가 로드되지 않았습니다.');
+      return;
+    }
+
+    if (typeof google === 'undefined') {
+      setError('Google Identity Services 스크립트가 로드되지 않았습니다.');
       return;
     }
 
     // 설정 검증
     const configErrors = validateConfig();
     if (configErrors.length > 0) {
-      console.error('Configuration errors:', configErrors);
       setError(`설정 오류: ${configErrors.join(', ')}`);
       return;
     }
 
-    console.log('Initializing Google Auth with:', {
-      apiKey: GOOGLE_CONFIG.apiKey.substring(0, 10) + '...',
-      clientId: GOOGLE_CONFIG.clientId.substring(0, 20) + '...',
-      hasEnvVars: {
-        apiKey: !!import.meta.env.VITE_GOOGLE_API_KEY,
-        clientId: !!import.meta.env.VITE_GOOGLE_CLIENT_ID,
+    try {
+      // gapi.client 초기화 (Drive API용)
+      await new Promise<void>((resolve) => {
+        gapi.load('client', async () => {
+          await gapi.client.init({
+            apiKey: GOOGLE_CONFIG.apiKey,
+            discoveryDocs: GOOGLE_CONFIG.discoveryDocs,
+          });
+          resolve();
+        });
+      });
+
+      // Token Client 초기화 (OAuth 2.0)
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CONFIG.clientId,
+        scope: GOOGLE_CONFIG.scope,
+        callback: (tokenResponse: any) => {
+          if (tokenResponse.error) {
+            console.error('Token error:', tokenResponse);
+            setError(`토큰 오류: ${tokenResponse.error}`);
+            return;
+          }
+
+          accessToken = tokenResponse.access_token;
+          setIsSignedIn(true);
+          onAuthChange(true, user);
+        },
+      });
+
+      setIsInitialized(true);
+
+      // 저장된 세션이 있는지 확인 (선택사항)
+      const savedUser = localStorage.getItem('syncviewer_user');
+      if (savedUser) {
+        const userData = JSON.parse(savedUser);
+        setUser(userData);
+        // 자동 로그인 시도
+        tokenClient.requestAccessToken({ prompt: '' });
       }
+
+    } catch (err: any) {
+      console.error('Error initializing Google Auth:', err);
+      setError(`Google 인증 초기화 실패: ${err.message || '알 수 없는 오류'}`);
+    }
+  }, [onAuthChange, user]);
+
+  useEffect(() => {
+    // 스크립트 로드 대기
+    const checkAndInit = () => {
+      if (typeof gapi !== 'undefined' && typeof google !== 'undefined') {
+        initGoogleAuth();
+      } else {
+        setTimeout(checkAndInit, 100);
+      }
+    };
+    checkAndInit();
+  }, [initGoogleAuth]);
+
+  const handleSignIn = () => {
+    if (!tokenClient) {
+      setError('인증 클라이언트가 초기화되지 않았습니다.');
+      return;
+    }
+
+    // Google One Tap 또는 팝업으로 로그인
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CONFIG.clientId,
+      callback: handleCredentialResponse,
+      auto_select: false,
     });
 
-    gapi.load('client:auth2', async () => {
-      try {
-        console.log('gapi.load callback executed');
-
-        // client만 먼저 초기화 (auth2는 별도로)
-        await gapi.client.init({
-          apiKey: GOOGLE_CONFIG.apiKey,
-          discoveryDocs: GOOGLE_CONFIG.discoveryDocs,
-        });
-
-        console.log('gapi.client initialized');
-
-        // auth2 별도 초기화 (iframe 문제 해결)
-        console.log('Initializing auth2 with cookie_policy...');
-
-        // getAuthInstance()로 이미 초기화되었는지 확인
-        let authInstance = gapi.auth2.getAuthInstance();
-
-        if (!authInstance) {
-          authInstance = await gapi.auth2.init({
-            client_id: GOOGLE_CONFIG.clientId,
-            scope: GOOGLE_CONFIG.scope,
-            cookie_policy: 'single_host_origin',
-            plugin_name: 'SyncViewer',
-          });
-          console.log('auth2 initialized with cookie_policy');
-        } else {
-          console.log('auth2 already initialized');
-        }
-
-        console.log('gapi.client.init completed');
-        console.log('authInstance:', authInstance);
-
-        // 인증 상태 변경 리스너
-        authInstance.isSignedIn.listen((signedIn: boolean) => {
-          handleAuthChange(signedIn);
-        });
-
-        // 초기 인증 상태 확인
-        handleAuthChange(authInstance.isSignedIn.get());
-        setIsInitialized(true);
-        console.log('Google Auth initialized successfully');
-      } catch (err: any) {
-        console.error('Error initializing Google Auth (full error):', err);
-        console.error('Error details:', {
-          message: err?.message,
-          details: err?.details,
-          error: err?.error,
-          result: err?.result,
-        });
-
-        let errorMessage = '알 수 없는 오류';
-        if (err?.details) {
-          errorMessage = err.details;
-        } else if (err?.error) {
-          errorMessage = `${err.error}: ${err.error_description || ''}`;
-        } else if (err?.result?.error) {
-          errorMessage = `${err.result.error.message} (${err.result.error.code})`;
-        } else if (err?.message) {
-          errorMessage = err.message;
-        }
-
-        setError(`Google 인증 초기화 실패: ${errorMessage}`);
+    // 버튼 클릭 시 팝업 프롬프트 표시
+    google.accounts.id.prompt((notification: any) => {
+      if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+        // One Tap이 표시되지 않으면 직접 토큰 요청
+        tokenClient.requestAccessToken({ prompt: 'consent' });
       }
     });
   };
 
-  const handleAuthChange = (signedIn: boolean) => {
-    setIsSignedIn(signedIn);
-
-    if (signedIn) {
-      const authInstance = gapi.auth2.getAuthInstance();
-      const currentUser = authInstance.currentUser.get();
-      const profile = currentUser.getBasicProfile();
-
-      const user = {
-        id: profile.getId(),
-        email: profile.getEmail(),
-        name: profile.getName(),
-        picture: profile.getImageUrl(),
-      };
-
-      onAuthChange(true, user);
+  const handleSignOut = () => {
+    if (accessToken) {
+      google.accounts.oauth2.revoke(accessToken, () => {
+        accessToken = null;
+        setIsSignedIn(false);
+        setUser(null);
+        localStorage.removeItem('syncviewer_user');
+        onAuthChange(false, null);
+      });
     } else {
+      setIsSignedIn(false);
+      setUser(null);
+      localStorage.removeItem('syncviewer_user');
       onAuthChange(false, null);
     }
   };
 
-  const handleSignIn = async () => {
-    try {
-      const authInstance = gapi.auth2.getAuthInstance();
-      console.log('Starting sign in...');
-
-      const user = await authInstance.signIn({
-        prompt: 'select_account',
-      });
-
-      console.log('Sign in successful:', user);
-    } catch (err: any) {
-      console.error('Sign in error:', err);
-      console.error('Error details:', {
-        error: err.error,
-        details: err.details,
-        message: err.message,
-      });
-
-      // 사용자에게 더 명확한 에러 표시
-      let errorMsg = '로그인에 실패했습니다.';
-      if (err.error === 'popup_closed_by_user') {
-        errorMsg = '로그인 팝업이 닫혔습니다.';
-      } else if (err.error === 'access_denied') {
-        errorMsg = '접근이 거부되었습니다. OAuth 동의 화면 설정을 확인하세요.';
-      } else if (err.error === 'server_error') {
-        errorMsg = 'Google 서버 오류가 발생했습니다. 잠시 후 다시 시도하거나 브라우저를 변경해보세요.';
-      }
-
-      alert(errorMsg + '\n\n기술 정보: ' + (err.error || err.message));
+  // 사용자 정보 저장
+  useEffect(() => {
+    if (user && isSignedIn) {
+      localStorage.setItem('syncviewer_user', JSON.stringify(user));
     }
-  };
-
-  const handleSignOut = () => {
-    const authInstance = gapi.auth2.getAuthInstance();
-    authInstance.signOut();
-  };
+  }, [user, isSignedIn]);
 
   if (error) {
     return (
@@ -221,6 +223,9 @@ const GoogleAuth: React.FC<GoogleAuthProps> = ({ onAuthChange }) => {
 
   return (
     <div style={styles.signedInContainer}>
+      {user && (
+        <span style={styles.userName}>{user.name}</span>
+      )}
       <button onClick={handleSignOut} style={styles.signOutButton}>
         로그아웃
       </button>
@@ -269,6 +274,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     position: 'absolute',
     top: '16px',
     right: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  userName: {
+    fontSize: '14px',
+    color: '#666',
   },
   signOutButton: {
     backgroundColor: '#f44336',

@@ -1,4 +1,5 @@
 import { Book, ReadingProgress } from '../types';
+import { getAccessToken } from '../components/Auth/GoogleAuth';
 
 declare const gapi: any;
 
@@ -23,21 +24,37 @@ class GoogleDriveService {
   }
 
   /**
+   * 현재 액세스 토큰 가져오기
+   */
+  private getToken(): string {
+    const token = getAccessToken();
+    if (!token) {
+      throw new Error('Access token not available. Please sign in first.');
+    }
+    return token;
+  }
+
+  /**
    * Google Drive API 초기화
    */
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
-    await new Promise<void>((resolve) => {
-      gapi.load('client', async () => {
-        await gapi.client.init({
-          apiKey: import.meta.env.VITE_GOOGLE_API_KEY,
-          discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+    // gapi.client가 이미 초기화되어 있는지 확인
+    if (typeof gapi !== 'undefined' && gapi.client) {
+      this.isInitialized = true;
+    } else {
+      await new Promise<void>((resolve) => {
+        gapi.load('client', async () => {
+          await gapi.client.init({
+            apiKey: import.meta.env.VITE_GOOGLE_API_KEY,
+            discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+          });
+          this.isInitialized = true;
+          resolve();
         });
-        this.isInitialized = true;
-        resolve();
       });
-    });
+    }
 
     // 폴더 생성 또는 찾기
     await this.ensureFoldersExist();
@@ -56,27 +73,42 @@ class GoogleDriveService {
    */
   private async findOrCreateFolder(folderName: string): Promise<string> {
     try {
-      // 기존 폴더 찾기
-      const response = await gapi.client.drive.files.list({
-        q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        fields: 'files(id, name)',
-        spaces: 'drive',
-      });
+      const token = this.getToken();
 
-      if (response.result.files && response.result.files.length > 0) {
-        return response.result.files[0].id;
+      // 기존 폴더 찾기
+      const searchResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false&fields=files(id,name)&spaces=drive`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const searchResult = await searchResponse.json();
+
+      if (searchResult.files && searchResult.files.length > 0) {
+        return searchResult.files[0].id;
       }
 
       // 폴더가 없으면 생성
-      const createResponse = await gapi.client.drive.files.create({
-        resource: {
-          name: folderName,
-          mimeType: 'application/vnd.google-apps.folder',
-        },
-        fields: 'id',
-      });
+      const createResponse = await fetch(
+        'https://www.googleapis.com/drive/v3/files?fields=id',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: folderName,
+            mimeType: 'application/vnd.google-apps.folder',
+          }),
+        }
+      );
 
-      return createResponse.result.id;
+      const createResult = await createResponse.json();
+      return createResult.id;
     } catch (error) {
       console.error('Error finding/creating folder:', error);
       throw error;
@@ -92,6 +124,8 @@ class GoogleDriveService {
     }
 
     try {
+      const token = this.getToken();
+
       const metadata = {
         name: file.name,
         mimeType: 'text/plain',
@@ -105,7 +139,7 @@ class GoogleDriveService {
       const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${gapi.client.getToken().access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: formData,
       });
@@ -138,13 +172,20 @@ class GoogleDriveService {
     }
 
     try {
-      const response = await gapi.client.drive.files.list({
-        q: `'${this.libraryFolderId}' in parents and trashed=false`,
-        fields: 'files(id, name, size, createdTime, modifiedTime)',
-        orderBy: 'modifiedTime desc',
-      });
+      const token = this.getToken();
 
-      const books: Book[] = response.result.files.map((file: any) => ({
+      const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q='${this.libraryFolderId}' in parents and trashed=false&fields=files(id,name,size,createdTime,modifiedTime)&orderBy=modifiedTime desc`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const result = await response.json();
+
+      const books: Book[] = (result.files || []).map((file: any) => ({
         id: file.id,
         title: file.name.replace(/\.\w+$/, ''),
         fileName: file.name,
@@ -167,9 +208,11 @@ class GoogleDriveService {
    */
   async downloadFileChunk(fileId: string, startOffset: number, endOffset: number): Promise<string> {
     try {
+      const token = this.getToken();
+
       const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
         headers: {
-          Authorization: `Bearer ${gapi.client.getToken().access_token}`,
+          Authorization: `Bearer ${token}`,
           Range: `bytes=${startOffset}-${endOffset}`,
         },
       });
@@ -195,27 +238,32 @@ class GoogleDriveService {
     }
 
     try {
+      const token = this.getToken();
       const fileName = `${progress.bookId}_progress.json`;
 
       // 기존 진행 상황 파일 찾기
-      const searchResponse = await gapi.client.drive.files.list({
-        q: `name='${fileName}' and '${this.progressFolderId}' in parents and trashed=false`,
-        fields: 'files(id)',
-      });
+      const searchResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=name='${fileName}' and '${this.progressFolderId}' in parents and trashed=false&fields=files(id)`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const searchResult = await searchResponse.json();
 
       const content = JSON.stringify(progress);
       const blob = new Blob([content], { type: 'application/json' });
 
-      if (searchResponse.result.files && searchResponse.result.files.length > 0) {
+      if (searchResult.files && searchResult.files.length > 0) {
         // 기존 파일 업데이트
-        const fileId = searchResponse.result.files[0].id;
-        const formData = new FormData();
-        formData.append('file', blob);
+        const fileId = searchResult.files[0].id;
 
         await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
           method: 'PATCH',
           headers: {
-            Authorization: `Bearer ${gapi.client.getToken().access_token}`,
+            Authorization: `Bearer ${token}`,
           },
           body: blob,
         });
@@ -234,7 +282,7 @@ class GoogleDriveService {
         await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${gapi.client.getToken().access_token}`,
+            Authorization: `Bearer ${token}`,
           },
           body: formData,
         });
@@ -254,21 +302,28 @@ class GoogleDriveService {
     }
 
     try {
+      const token = this.getToken();
       const fileName = `${bookId}_progress.json`;
 
-      const searchResponse = await gapi.client.drive.files.list({
-        q: `name='${fileName}' and '${this.progressFolderId}' in parents and trashed=false`,
-        fields: 'files(id)',
-      });
+      const searchResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=name='${fileName}' and '${this.progressFolderId}' in parents and trashed=false&fields=files(id)`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
 
-      if (!searchResponse.result.files || searchResponse.result.files.length === 0) {
+      const searchResult = await searchResponse.json();
+
+      if (!searchResult.files || searchResult.files.length === 0) {
         return null;
       }
 
-      const fileId = searchResponse.result.files[0].id;
+      const fileId = searchResult.files[0].id;
       const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
         headers: {
-          Authorization: `Bearer ${gapi.client.getToken().access_token}`,
+          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -289,20 +344,34 @@ class GoogleDriveService {
    */
   async deleteBook(bookId: string): Promise<void> {
     try {
-      await gapi.client.drive.files.delete({
-        fileId: bookId,
+      const token = this.getToken();
+
+      await fetch(`https://www.googleapis.com/drive/v3/files/${bookId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       // 연관된 진행 상황 파일도 삭제
       const fileName = `${bookId}_progress.json`;
-      const searchResponse = await gapi.client.drive.files.list({
-        q: `name='${fileName}' and '${this.progressFolderId}' in parents and trashed=false`,
-        fields: 'files(id)',
-      });
+      const searchResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=name='${fileName}' and '${this.progressFolderId}' in parents and trashed=false&fields=files(id)`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
 
-      if (searchResponse.result.files && searchResponse.result.files.length > 0) {
-        await gapi.client.drive.files.delete({
-          fileId: searchResponse.result.files[0].id,
+      const searchResult = await searchResponse.json();
+
+      if (searchResult.files && searchResult.files.length > 0) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${searchResult.files[0].id}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
         });
       }
     } catch (error) {
